@@ -311,22 +311,23 @@ def eval_models(model_paths, data_path):
     return model_results
 
 
-def print_eval(model_metrics):
+def print_eval(model_metrics, decimals=4):
     '''
-    Prints out model metrics for a single model in more easily-readable format
+    Prints out model metrics for a single model in more readable format
     
     Parameters:
     model_metrics(dict) - single dictionary element of eval_models output,
         corresponding to the performance metrics of a single model
-        
+    decimals(int) - number of decimals to round to
+    
     Returns:
     Confusion matrix
     '''
     
-    print('accuracy: ', model_metrics['acc'])
-    print('loss: ', model_metrics['loss'])
-    print('pcr: ', model_metrics['pcr'])
-    print('mean pcr: ', model_metrics['mpcr'])
+    print('accuracy: ', str(round(model_metrics['acc']*100, decimals-2)) + '%')
+    print('loss: ', round(model_metrics['loss'], decimals))
+    print('pcr: ', model_metrics['pcr'].round(decimals))
+    print('mean pcr: ', str(round(model_metrics['mpcr']*100, decimals-2)) + '%')
     print('confusion matrix: ')
     
     return model_metrics['cm']
