@@ -46,14 +46,14 @@ def build_datagens(train_path, valid_path, target_size=(224, 224), batch_size=8,
     return tuple([train_batches, valid_batches])
 
 
-def build_VGG16(width, new_weights=False, trainable=False, dropout1=0, 
+def build_VGG16(widths, new_weights=False, trainable=False, dropout1=0, 
                 dropout2=0):
     '''
     Builds a modified version of the VGG16 model for transfer learning
     
     Parameters:
-    width(int) - number of nodes present in each of the two new FC layers 
-        after the convolutional layers
+    widths(tuple of ints) - number of nodes present in each of the two new FC 
+        layers after the convolutional layers
     new_weights(bool) - whether to reinitialize the weights in the VGG16
         convolutional layers
     trainable(bool) - whether to allow updating of convolutional weights
@@ -83,11 +83,13 @@ def build_VGG16(width, new_weights=False, trainable=False, dropout1=0,
             layer.trainable = False
     
     # add two FC layers to end of convolutional layers
+    width1, width2 = widths
+    
     inputs = base_model.output
     x = Flatten()(inputs)
-    x = Dense(width, activation='relu')(x)
+    x = Dense(width1, activation='relu')(x)
     x = Dropout(dropout1)(x)
-    x = Dense(width, activation='relu')(x)
+    x = Dense(width2, activation='relu')(x)
     x = Dropout(dropout2)(x)
     preds = Dense(5, activation='softmax')(x)
 
@@ -96,14 +98,15 @@ def build_VGG16(width, new_weights=False, trainable=False, dropout1=0,
     return model
 
 
-def run_in_replicate(width, name, train_batches, valid_batches, replicates=2, 
+def run_in_replicate(widths, name, train_batches, valid_batches, replicates=2, 
                      n_epochs=10, new_weights=False, trainable=False, 
                      dropout1=0, dropout2=0, learning_rate=0.0001):
     '''
     Runs multiple replicates for each model training
     
     Parameters:
-    width(int) - number of nodes in each of the fully connected layers
+    widths(tuple of ints) - number of nodes in each of the fully connected 
+        layers
     name(str) - string to include in the filename
     train_batches - generator for feeding training images into the model
     valid_batches - generator for feeding validation images into the model
@@ -127,6 +130,7 @@ def run_in_replicate(width, name, train_batches, valid_batches, replicates=2,
     from keras.backend import clear_session
     import numpy as np
     import pandas as pd
+    import gc
     
     filename = 'models/vgg16_{}_'.format(str(name))
     
@@ -143,7 +147,7 @@ def run_in_replicate(width, name, train_batches, valid_batches, replicates=2,
                                        save_best_only=True)
 
         # build and train model
-        model = build_VGG16(width, new_weights=new_weights, trainable=trainable,
+        model = build_VGG16(widths, new_weights=new_weights, trainable=trainable,
                             dropout1=dropout1, dropout2=dropout2)
         
         model.compile(optimizer=Adam(lr=learning_rate, decay=0.1), 
@@ -160,6 +164,7 @@ def run_in_replicate(width, name, train_batches, valid_batches, replicates=2,
         # remove clutter from memory
         del model
         clear_session()
+        gc.collect()
         
     def avg_metric(metric):
         average_metric = np.array(histories[0].history[metric])
@@ -266,6 +271,7 @@ def eval_models(model_paths, data_path):
     from keras.backend import clear_session
     from sklearn.metrics import confusion_matrix
     from keras.preprocessing.image import ImageDataGenerator
+    import gc
     
     # build generator to feed the model
     print('Building image generator...')
@@ -305,6 +311,7 @@ def eval_models(model_paths, data_path):
         # remove clutter from memory
         del model
         clear_session()
+        gc.collect()
     
     print('Evaluation complete.\n')
     
@@ -346,15 +353,34 @@ def eval_table(model_metrics, index_name, columns=['acc', 'loss', 'mpcr'],
     
     Returns:
     pandas DataFrame with fields of accuracy, loss, and mean per-class recall,
-    and rows of models evaluated
+    grouped by condition
     '''
     
     from pandas import DataFrame
     
     metrics = DataFrame(model_metrics).transpose()
-    metrics.index.name = index_name
+    metrics.index.name = 'condition'
     metrics = metrics[columns]
-    metrics = metrics.astype('float64').round(decimals)
-    
-    return metrics
+
+    # drop models that did not converge
+    metrics = metrics[metrics.acc > 0.70]
+
+    # group models by condition
+    metrics.reset_index(inplace=True)
+    regex = '_([\de-]*) - (\d*)$'.format(index_name)
+    metrics[index_name] = metrics.condition.str.extract(regex, expand=True)[0]
+    metrics[index_name] = metrics[index_name].str.replace('-', '.')
+    metrics[index_name] = metrics[index_name].str.replace('e.', 'e-')
+    metrics['replicate'] = metrics.condition.str.extract(regex, expand=True)[1]
+    metrics.drop('condition', axis=1, inplace=True)
+
+    agg_dict = {'acc': ['max', 'mean'],
+                'loss': ['min', 'mean'],
+                'mpcr': ['max', 'mean']}
+
+    metrics = metrics.astype('float64')
+    table = metrics.groupby(index_name).agg(agg_dict)
+    table = table.round(decimals)
+
+    return table
     
