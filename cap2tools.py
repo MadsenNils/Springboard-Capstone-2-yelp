@@ -179,6 +179,8 @@ def run_in_replicate(widths, name, train_batches, valid_batches, replicates=2,
     loss = avg_metric('loss')
     val_acc = avg_metric('val_acc')
     val_loss = avg_metric('val_loss')
+
+    gc.collect()
     
     return {'acc': acc, 'loss':loss, 'val_acc':val_acc, 'val_loss':val_loss}
 
@@ -252,7 +254,7 @@ def plot_history(history):
     return None
     
 
-def eval_models(model_paths, data_path):
+def eval_models(model_paths, data_path, save_path=None):
     '''
     Evaluates performance of a model in terms of loss, accuracy, confusion
     matrix, and mean per-class recall
@@ -261,6 +263,7 @@ def eval_models(model_paths, data_path):
     model_paths(dict) - dictionary with model names as keys and paths pointing 
         to the .h5 files of the trained models as values
     data_path(string) - path to the image directory of the target dataset
+    json_path(string) - optional file path to save output to
     
     Returns:
     Dictionary of dictionaries each containing loss, accuracy, confusion matrix, 
@@ -269,10 +272,12 @@ def eval_models(model_paths, data_path):
     
     from keras.models import load_model
     from keras.backend import clear_session
-    from sklearn.metrics import confusion_matrix
     from keras.preprocessing.image import ImageDataGenerator
+    from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
+    from sklearn.preprocessing import LabelBinarizer
     import gc
-    
+    import json
+
     # build generator to feed the model
     print('Building image generator...')
     generator = ImageDataGenerator().flow_from_directory(data_path, 
@@ -292,28 +297,45 @@ def eval_models(model_paths, data_path):
         print('Evaluating {}'.format(path))
         metrics = dict()
         metrics['loss'], metrics['acc'] = model.evaluate_generator(generator)
-        
+
         # predict labels
-        y_pred = model.predict_generator(generator)
-        y_pred = y_pred.argmax(axis=1)
+        y_prob = model.predict_generator(generator)
+        y_pred = y_prob.argmax(axis=1)
 
         # calculate confusion matrix
         cm = confusion_matrix(y_true, y_pred)
         metrics['cm'] = cm.tolist()
-        
+
         # mean per-class recall
         pcr = cm.diagonal()/cm.sum(axis=1)
-        metrics['pcr'] = pcr
+        metrics['pcr'] = list(pcr)
         metrics['mpcr'] = pcr.mean()
+
+        # F1 score
+        metrics['class_f1s'] = list(f1_score(y_true, y_pred, average=None))
+        metrics['macro_f1'] = f1_score(y_true, y_pred, average='macro')
+        metrics['micro_f1'] = f1_score(y_true, y_pred, average='micro')
         
+        # AUC score
+        y_binary = LabelBinarizer().fit_transform(y_true)
+        metrics['class_aucs'] = list(roc_auc_score(y_binary, y_prob, average=None))
+        metrics['macro_auc'] = roc_auc_score(y_binary, y_prob, average='macro')
+        metrics['micro_auc'] = roc_auc_score(y_binary, y_prob, average='micro')
+
         model_results[name] = metrics
-        
+
         # remove clutter from memory
         del model
         clear_session()
         gc.collect()
     
+    if save_path:
+        print('Saving evaluation to {}'.format(save_path))
+        with open(save_path, 'w') as f:
+            json.dump(model_results, f)
+    
     print('Evaluation complete.\n')
+    gc.collect()
     
     return model_results
 
@@ -331,17 +353,27 @@ def print_eval(model_metrics, decimals=4):
     Confusion matrix
     '''
     
+    import numpy as np
+    
     print('accuracy: ', str(round(model_metrics['acc']*100, decimals-2)) + '%')
     print('loss: ', round(model_metrics['loss'], decimals))
-    print('pcr: ', model_metrics['pcr'].round(decimals))
-    print('mean pcr: ', str(round(model_metrics['mpcr']*100, decimals-2)) + '%')
+   
+    print('recalls: ', np.array(model_metrics['pcr']).round(decimals))
+    print('macro recall: ', str(round(model_metrics['mpcr']*100, decimals-2)) + '%')
+    
+    print('f1s: ', np.array(model_metrics['class_f1s']).round(decimals))
+    print('macro f1: ', round(model_metrics['macro_f1'], decimals))
+    
+    print('aucs: ', np.array(model_metrics['class_aucs']).round(decimals))
+    print('macro auc: ', round(model_metrics['macro_auc'], decimals))
+    
     print('confusion matrix: ')
     
     return model_metrics['cm']
         
 
-def eval_table(model_metrics, index_name, columns=['acc', 'loss', 'mpcr'],  
-               decimals=3):
+def eval_table(model_metrics, index_name, decimals=3,
+               columns=['acc', 'loss', 'mpcr', 'macro_f1', 'macro_auc']):
     '''
     Creates a formatted table summarizing model performance
     
@@ -374,13 +406,47 @@ def eval_table(model_metrics, index_name, columns=['acc', 'loss', 'mpcr'],
     metrics['replicate'] = metrics.condition.str.extract(regex, expand=True)[1]
     metrics.drop('condition', axis=1, inplace=True)
 
-    agg_dict = {'acc': ['max', 'mean'],
-                'loss': ['min', 'mean'],
-                'mpcr': ['max', 'mean']}
+    # agg_dict = {'Acc': ['max', 'mean'],
+                # 'Loss': ['min', 'mean'],
+                # 'MacR': ['max', 'mean']}
 
     metrics = metrics.astype('float64')
-    table = metrics.groupby(index_name).agg(agg_dict)
+    # table = metrics.groupby(index_name).agg(agg_dict)
+    table = metrics.groupby(index_name).mean()
     table = table.round(decimals)
 
     return table
     
+def comp_table(model_metrics, decimals=3):
+    '''
+    Creates table comparing the performance of multiple models across multiple
+    metrics
+    
+    Parameters:
+    model_metrics(dict) - an output dictionary of eval_models
+    decimals(int) - number of decimals for rounding the table values
+    
+    Returns:
+    pandas DataFrame with a row for each model, and columns of accuracy, mpcr, 
+    and per-class recalls
+    '''
+    
+    from pandas import Series, DataFrame
+    
+    comp_dict = {}
+
+    for model, metrics in model_metrics.items():
+        model_row = [metrics['acc'], metrics['mpcr'], metrics['macro_f1'], 
+                     metrics['macro_auc']]
+        model_row.extend(metrics['class_f1s'])
+        model_row = Series(model_row)
+        model_row.index = ['Accuracy', 'MacR', 'MacF1', 'MacAUC', 'Drink', 
+                           'Food', 'Inside', 'Menu', 'Outside']
+        model_row['Accuracy'] = model_row['Accuracy'] * 100
+        model_row = model_row.round(decimals)
+        comp_dict[model] = model_row
+        
+    table = DataFrame(comp_dict).transpose()
+    table.index.name = 'Model'
+    
+    return table

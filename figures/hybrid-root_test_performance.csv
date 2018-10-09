@@ -1,0 +1,2 @@
+Model,Accuracy,MacR,MacF1,MacAUC,Drink,Food,Inside,Menu,Outside
+Hybrid-Root,93.433,0.895,0.849,0.991,0.774,0.979,0.889,0.809,0.793
