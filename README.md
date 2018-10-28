@@ -1,6 +1,16 @@
 # Springboard-Capstone-2-yelp
 ___
 
+## Project Reports
+
+**01_Capstone 2 Project Proposal.pdf** - Project proposal outlining goal and utility of the project, overview of the data available, and potential approaches.
+
+**02_Capstone 2 Milestone Report.pdf** - Progress report containing introduction, data cleaning and image inspection, and hyperparameter tuning.
+
+**03_Capstone 2 Final Report.pdf** - Final report containing introduction, data cleaning and image inspection, hyperparameter tuning, solutions to class imbalance, final test set performance, and possible future directions.
+
+**04_Capstone 2 Final Slides.pptx** - Final report in slide format, focusing on major points.
+
 ## Information for Image Filename, Label, and Set
 
 **yelp_academic_dataset_photo.json** - Original json file for the image portion of the Yelp dataset
